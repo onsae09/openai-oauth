@@ -2,6 +2,7 @@ import {
 	type CodexOAuthClient,
 	collectCompletedResponseFromSse,
 	normalizeCodexResponsesBody,
+	normalizeCodexResponsesSseStream,
 } from "../../openai-oauth-core/src/index.js"
 import {
 	copyUpstreamResponse,
@@ -10,7 +11,6 @@ import {
 	sseHeaders,
 	toErrorResponse,
 	toJsonResponse,
-	usesServerReplayState,
 } from "./shared.js"
 import type { OpenAIOAuthServerOptions } from "./types.js"
 
@@ -22,12 +22,6 @@ export const handleResponsesRequest = async (
 	const body = await request.json()
 	if (!isRecord(body)) {
 		return toErrorResponse("Request body must be a JSON object.")
-	}
-
-	if (usesServerReplayState(body)) {
-		return toErrorResponse(
-			"Stateless Codex responses endpoint does not support `previous_response_id` or `item_reference`. Replay the full conversation history in `input` on each request.",
-		)
 	}
 
 	const wantsStream = body.stream === true
@@ -50,7 +44,10 @@ export const handleResponsesRequest = async (
 	}
 
 	if (wantsStream) {
-		return new Response(upstream.body, {
+		const body = upstream.body
+			? normalizeCodexResponsesSseStream(upstream.body)
+			: null
+		return new Response(body, {
 			status: upstream.status,
 			headers: {
 				...sseHeaders,
