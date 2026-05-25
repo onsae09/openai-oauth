@@ -24,7 +24,7 @@ export const sseHeaders = {
 export const corsHeaders = {
 	"access-control-allow-origin": "*",
 	"access-control-allow-methods": "GET,POST,OPTIONS",
-	"access-control-allow-headers": "authorization,content-type",
+	"access-control-allow-headers": "authorization,content-type,x-api-key",
 }
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>

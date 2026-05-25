@@ -17,10 +17,11 @@ This package lets you create a localhost proxy to `chatgpt.com/backend-api/codex
 Use directly:
 
 ```bash
+python3 scripts/api_keys.py
 npx openai-oauth
 
 OpenAI-compatible endpoint ready at http://127.0.0.1:10531/v1
-Use this as your OpenAI base URL. No API key is required.
+Use this as your OpenAI base URL. Send Authorization: Bearer <api-key>.
 Available Models: gpt-5.4, gpt-5.3-codex, ...
 ```
 
@@ -56,8 +57,31 @@ The CLI and the provider share the same core OAuth transport settings.
 | OAuth client id     | `--oauth-client-id` | `clientId`     | `app_EMoamEEZ73f0CkXaXp7hrann`                                                                                                                          | Override the OAuth client id used for refresh.                                                                                     |
 | OAuth token URL     | `--oauth-token-url` | `tokenUrl`     | `https://auth.openai.com/oauth/token`                                                                                                                   | Override the OAuth token URL used for refresh.                                                                                     |
 | Auth file path      | `--oauth-file`      | `authFilePath` | `--oauth-file` path if provided, otherwise `$CHATGPT_LOCAL_HOME/auth.json`, `$CODEX_HOME/auth.json`, `~/.chatgpt-local/auth.json`, `~/.codex/auth.json` | Override where the local OAuth auth file is discovered.                                                                            |
+| API keys file path  | `--api-keys-file`   | `apiKeysFilePath` | `api_key.json`                                                                                                                                          | JSON key store used to authenticate `/v1/*` requests. Create keys with the interactive `python3 scripts/api_keys.py` CUI.          |
 | Ensure fresh tokens | N/A                 | `ensureFresh`  | `true`                                                                                                                                                  | Control whether access tokens are refreshed automatically.                                                                         |
 | Provider name       | N/A                 | `name`         | `openai`                                                                                                                                                | Override the provider name exposed to Vercel AI SDK internals.                                                                     |
+
+## API Keys
+
+The local OpenAI-compatible server requires an API key for every `/v1/*`
+request. Health checks and CORS preflight requests stay public.
+
+Create a key:
+
+```bash
+python3 scripts/api_keys.py
+```
+
+The CUI guides you through creating, listing, and revoking keys. It prints the
+full key once and stores only its SHA-256 hash in
+`api_key.json`. Use the generated key like a normal OpenAI key:
+
+```bash
+curl http://127.0.0.1:10531/v1/models \
+  -H "Authorization: Bearer ooa_..."
+```
+
+Run the same CUI again whenever you need to list or revoke keys.
 
 ## Features
 
@@ -66,10 +90,57 @@ What currently works:
 - Working Endpoints:
   - `/v1/responses`
   - `/v1/chat/completions`
+  - `/v1/images/generations`
   - `/v1/models` (account-aware by default, or overridden with `--models`)
 - Streaming Responses
+- Image generation through `/v1/images/generations` or streamed `/v1/responses` `image_generation` tool events
 - Toolcalls
 - Reasoning Traces
+
+## Image Generation
+
+Image generation is available through the OpenAI-compatible
+`/v1/images/generations` route. Internally, the default implementation uses the
+Codex `/responses` image generation tool, but the server routes through an
+`ImageGenerationGateway` interface so deployments can swap the implementation.
+
+Request:
+
+```bash
+curl http://127.0.0.1:10531/v1/images/generations \
+  -H "Authorization: Bearer ooa_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4",
+    "prompt": "Generate a simple image of a blue square on a white background.",
+    "images": ["data:image/png;base64,..."],
+    "size": "1024x1024",
+    "quality": "low"
+  }'
+```
+
+The optional `images` field is a project-specific extension for reference
+images. Entries may be image data URLs or raw base64 strings. Raw base64 entries
+are sent upstream as `data:image/png;base64,...` image inputs.
+
+Response:
+
+```json
+{
+  "created": 1760000000,
+  "data": [
+    {
+      "b64_json": "...base64 image data...",
+      "revised_prompt": "Generate a simple image of a blue square on a white background."
+    }
+  ]
+}
+```
+
+You can also call streamed `/v1/responses` directly with an `image_generation`
+tool. In that mode, image bytes are emitted on
+`response.image_generation_call.partial_image` events in the `partial_image_b64`
+field.
 
 ## Known Limitations
 

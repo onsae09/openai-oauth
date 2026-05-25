@@ -70,7 +70,10 @@ export const toStartupMessage = (
 ): string =>
 	[
 		`OpenAI-compatible endpoint ready at ${underline(baseUrl, options)}`,
-		dim("Use this as your OpenAI base URL. No API key is required.", options),
+		dim(
+			"Use this as your OpenAI base URL. Send Authorization: Bearer <api-key>.",
+			options,
+		),
 		"",
 		`Available Models: ${availableModels.join(", ")}`,
 	].join("\n")

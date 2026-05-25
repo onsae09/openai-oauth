@@ -21,7 +21,7 @@ describe("cli logging", () => {
 		).toBe(
 			[
 				"OpenAI-compatible endpoint ready at http://127.0.0.1:10531/v1",
-				"Use this as your OpenAI base URL. No API key is required.",
+				"Use this as your OpenAI base URL. Send Authorization: Bearer <api-key>.",
 				"",
 				"Available Models: gpt-5.4, gpt-5.3-codex",
 			].join("\n"),

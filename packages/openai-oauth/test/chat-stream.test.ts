@@ -217,8 +217,8 @@ describe("streamChatCompletions", () => {
 		})
 
 		// Second chunk: complete arguments from tool-call fallback
-		const args = (toolChunks[1] as any).choices[0].delta.tool_calls[0]
-			.function.arguments
+		const args = (toolChunks[1] as any).choices[0].delta.tool_calls[0].function
+			.arguments
 		expect(JSON.parse(args)).toEqual({
 			file_path: "/etc/hosts",
 			offset: 0,

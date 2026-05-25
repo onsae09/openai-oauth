@@ -8,7 +8,13 @@ import {
 	createOpenAIOAuth,
 	type OpenAIOAuthProvider,
 } from "../../openai-oauth-provider/src/index.js"
+import { authenticateApiKey } from "./api-keys.js"
 import { handleChatCompletionsRequest } from "./chat-completions.js"
+import {
+	CodexResponsesImageGenerationGateway,
+	type ImageGenerationGateway,
+} from "./image-generation.js"
+import { handleImagesGenerationsRequest } from "./images.js"
 import { createRequestLogger } from "./logging.js"
 import { createModelResolver } from "./models.js"
 import { handleResponsesRequest } from "./responses.js"
@@ -32,6 +38,7 @@ const handleRoutes = async (
 	settings: OpenAIOAuthServerOptions,
 	provider: OpenAIOAuthProvider,
 	client: ReturnType<typeof createCodexOAuthClient>,
+	imageGateway: ImageGenerationGateway,
 	resolveModels: () => Promise<string[]>,
 	requestLogger: ReturnType<typeof createRequestLogger>,
 ): Promise<Response> => {
@@ -46,8 +53,15 @@ const handleRoutes = async (
 	if (request.method === "GET" && url.pathname === "/health") {
 		return toJsonResponse({
 			ok: true,
-			replay_state: "stateless",
+			replay_state: "stateful",
 		})
+	}
+
+	if (url.pathname === "/v1" || url.pathname.startsWith("/v1/")) {
+		const auth = await authenticateApiKey(request, settings.apiKeysFilePath)
+		if (!auth.ok) {
+			return toErrorResponse(auth.message, 401, "authentication_error")
+		}
 	}
 
 	if (request.method === "GET" && url.pathname === "/v1/models") {
@@ -79,6 +93,10 @@ const handleRoutes = async (
 		return handleChatCompletionsRequest(request, provider, requestLogger)
 	}
 
+	if (request.method === "POST" && url.pathname === "/v1/images/generations") {
+		return handleImagesGenerationsRequest(request, imageGateway)
+	}
+
 	return toErrorResponse("Route not found.", 404, "not_found_error")
 }
 
@@ -87,10 +105,12 @@ export const createOpenAIOAuthFetchHandler = (
 ): ((request: Request) => Promise<Response>) => {
 	const sharedSettings: CodexOAuthSettings = {
 		...settings,
-		responsesState: false,
 	}
 	const client = createCodexOAuthClient(sharedSettings)
 	const provider = createOpenAIOAuth(sharedSettings)
+	const imageGateway =
+		settings.imageGenerationGateway ??
+		new CodexResponsesImageGenerationGateway(client)
 	const resolveModels = createModelResolver(client, settings.models, {
 		codexVersion: settings.codexVersion,
 	})
@@ -103,6 +123,7 @@ export const createOpenAIOAuthFetchHandler = (
 				settings,
 				provider,
 				client,
+				imageGateway,
 				resolveModels,
 				requestLogger,
 			)

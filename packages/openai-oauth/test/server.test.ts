@@ -1,8 +1,17 @@
+import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import type { generateObject } from "ai"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { createOpenAIOAuthFetchHandler } from "../src/index.js"
+import type { OpenAIOAuthProvider } from "../../openai-oauth-provider/src/index.js"
+import { handleChatCompletionsRequest } from "../src/chat-completions.js"
+import {
+	CodexResponsesImageGenerationGateway,
+	createOpenAIOAuthFetchHandler,
+} from "../src/index.js"
+
+const TEST_API_KEY = "test-api-key"
 
 const createAuthFile = async (): Promise<string> => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "openai-oauth-server-"))
@@ -24,6 +33,37 @@ const createAuthFile = async (): Promise<string> => {
 	return authPath
 }
 
+const createApiKeysFile = async (): Promise<string> => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "openai-oauth-keys-"))
+	const keyPath = path.join(root, "api-keys.json")
+	await fs.writeFile(
+		keyPath,
+		JSON.stringify(
+			{
+				version: 1,
+				keys: [
+					{
+						id: "key_test",
+						name: "test",
+						prefix: "test-api-key",
+						hash: `sha256:${createHash("sha256").update(TEST_API_KEY).digest("hex")}`,
+						created_at: "2026-01-01T00:00:00Z",
+					},
+				],
+			},
+			null,
+			2,
+		),
+		"utf-8",
+	)
+	return keyPath
+}
+
+const authHeaders = (headers: Record<string, string> = {}) => ({
+	...headers,
+	Authorization: `Bearer ${TEST_API_KEY}`,
+})
+
 describe("openai oauth server", () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
@@ -31,12 +71,14 @@ describe("openai oauth server", () => {
 
 	test("lists configured models", async () => {
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			models: ["gpt-5.2", "gpt-5.1-codex"],
 		})
 
 		const response = await handler(
 			new Request("http://localhost/v1/models", {
 				method: "GET",
+				headers: authHeaders(),
 			}),
 		)
 
@@ -83,6 +125,7 @@ describe("openai oauth server", () => {
 			)
 		})
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -91,6 +134,7 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/models", {
 				method: "GET",
+				headers: authHeaders(),
 			}),
 		)
 
@@ -137,6 +181,7 @@ describe("openai oauth server", () => {
 				),
 		)
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -145,6 +190,7 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/models", {
 				method: "GET",
+				headers: authHeaders(),
 			}),
 		)
 
@@ -172,8 +218,47 @@ describe("openai oauth server", () => {
 
 		await expect(health.json()).resolves.toEqual({
 			ok: true,
-			replay_state: "stateless",
+			replay_state: "stateful",
 		})
+	})
+
+	test("requires an API key for OpenAI-compatible routes", async () => {
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			models: ["gpt-5.4"],
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/models", {
+				method: "GET",
+			}),
+		)
+
+		expect(response.status).toBe(401)
+		await expect(response.json()).resolves.toEqual({
+			error: {
+				message: "Missing API key. Send `Authorization: Bearer <api-key>`.",
+				type: "authentication_error",
+			},
+		})
+	})
+
+	test("accepts x-api-key authentication", async () => {
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			models: ["gpt-5.4"],
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/models", {
+				method: "GET",
+				headers: {
+					"x-api-key": TEST_API_KEY,
+				},
+			}),
+		)
+
+		expect(response.status).toBe(200)
 	})
 
 	test("aggregates streaming responses requests into json when stream is false", async () => {
@@ -201,6 +286,7 @@ describe("openai oauth server", () => {
 		})
 
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -210,9 +296,9 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/responses", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.2",
 					stream: false,
@@ -242,10 +328,43 @@ describe("openai oauth server", () => {
 		})
 	})
 
-	test("rejects previous_response_id on the stateless responses endpoint", async () => {
+	test("rebuilds non-streaming response body from streamed items when response.completed.output is empty", async () => {
+		// Regression: Codex sometimes emits `response.completed` with an empty
+		// `output` array even though individual items were streamed via
+		// `response.output_item.done`. The non-streaming client path must
+		// reconstruct `output` from those streamed items rather than returning
+		// an empty assistant turn.
 		const authFilePath = await createAuthFile()
-		const fetch = vi.fn()
+		const fetch = vi.fn(async () => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(
+						new TextEncoder().encode(
+							[
+								"event: response.created",
+								'data: {"type":"response.created","response":{"id":"resp_rebuild","status":"in_progress","output":[]}}',
+								"",
+								"event: response.output_item.done",
+								'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thinking"}]}}',
+								"",
+								"event: response.output_item.done",
+								'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_1","content":[{"type":"output_text","text":"hello"}]}}',
+								"",
+								"event: response.completed",
+								'data: {"type":"response.completed","response":{"id":"resp_rebuild","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}',
+								"",
+							].join("\n"),
+						),
+					)
+					controller.close()
+				},
+			})
+
+			return new Response(stream, { status: 200 })
+		})
+
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -254,9 +373,63 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/responses", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
+				}),
+				body: JSON.stringify({
+					model: "gpt-5.4",
+					stream: false,
+				}),
+			}),
+		)
+
+		expect(response.status).toBe(200)
+		const json = (await response.json()) as Record<string, unknown>
+		expect(json.id).toBe("resp_rebuild")
+		const output = json.output as Record<string, unknown>[]
+		expect(Array.isArray(output)).toBe(true)
+		expect(output.length).toBe(2)
+		expect(output[0]).toMatchObject({ type: "reasoning", id: "rs_1" })
+		expect(output[1]).toMatchObject({ type: "message", id: "msg_1" })
+
+		await fs.rm(path.dirname(authFilePath), {
+			recursive: true,
+			force: true,
+		})
+	})
+
+	test("forwards previous_response_id to upstream when not cached locally", async () => {
+		const authFilePath = await createAuthFile()
+		const fetch = vi.fn(async () => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(
+						new TextEncoder().encode(
+							[
+								"event: response.completed",
+								'data: {"response":{"id":"resp_2","status":"completed","output":[]}}',
+								"",
+							].join("\n"),
+						),
+					)
+					controller.close()
 				},
+			})
+			return new Response(stream, { status: 200 })
+		})
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			authFilePath,
+			ensureFresh: false,
+			fetch,
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/responses", {
+				method: "POST",
+				headers: authHeaders({
+					"Content-Type": "application/json",
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.2",
 					stream: false,
@@ -266,22 +439,185 @@ describe("openai oauth server", () => {
 			}),
 		)
 
+		expect(fetch).toHaveBeenCalledTimes(1)
+		const [, init] = fetch.mock.calls[0] ?? []
+		expect(JSON.parse(String(init?.body))).toMatchObject({
+			model: "gpt-5.2",
+			previous_response_id: "resp_1",
+		})
+		expect(response.status).toBe(200)
+
+		await fs.rm(path.dirname(authFilePath), {
+			recursive: true,
+			force: true,
+		})
+	})
+
+	test("routes image generations through the configured gateway", async () => {
+		const imageGenerationGateway = {
+			generate: vi.fn(async () => ({
+				created: 123,
+				data: [{ b64_json: "image-data" }],
+			})),
+		}
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			imageGenerationGateway,
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/images/generations", {
+				method: "POST",
+				headers: authHeaders({
+					"Content-Type": "application/json",
+				}),
+				body: JSON.stringify({
+					model: "gpt-5.4",
+					prompt: "draw a square",
+					images: ["data:image/png;base64,reference-image"],
+					size: "1024x1024",
+				}),
+			}),
+		)
+
+		expect(response.status).toBe(200)
+		expect(imageGenerationGateway.generate).toHaveBeenCalledWith({
+			model: "gpt-5.4",
+			prompt: "draw a square",
+			images: ["data:image/png;base64,reference-image"],
+			size: "1024x1024",
+		})
+		await expect(response.json()).resolves.toEqual({
+			created: 123,
+			data: [{ b64_json: "image-data" }],
+		})
+	})
+
+	test("converts codex image generation SSE into images response JSON", async () => {
+		const authFilePath = await createAuthFile()
+		const fetch = vi.fn(async () => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(
+						new TextEncoder().encode(
+							[
+								"event: response.image_generation_call.partial_image",
+								'data: {"partial_image_b64":"partial-image-data"}',
+								"",
+								"event: response.completed",
+								'data: {"response":{"status":"completed"}}',
+								"",
+							].join("\n"),
+						),
+					)
+					controller.close()
+				},
+			})
+
+			return new Response(stream, { status: 200 })
+		})
+		const client = {
+			baseURL: "https://chatgpt.com/backend-api/codex",
+			fetch,
+			request: (path: string, init?: RequestInit) =>
+				fetch(`https://chatgpt.com/backend-api/codex${path}`, init),
+		}
+		const gateway = new CodexResponsesImageGenerationGateway(client)
+
+		const response = await gateway.generate({
+			model: "gpt-5.4",
+			prompt: "draw a square",
+			images: ["data:image/png;base64,existing-data-url", "raw-base64"],
+			n: 1,
+			size: "1024x1024",
+			quality: "low",
+		})
+
+		expect(fetch).toHaveBeenCalledTimes(1)
+		const [, init] = fetch.mock.calls[0] ?? []
+		expect(JSON.parse(String(init?.body))).toEqual({
+			model: "gpt-5.4",
+			stream: true,
+			input: [
+				{
+					role: "user",
+					content: [
+						{
+							type: "input_image",
+							image_url: "data:image/png;base64,existing-data-url",
+						},
+						{
+							type: "input_image",
+							image_url: "data:image/png;base64,raw-base64",
+						},
+						{
+							type: "input_text",
+							text: "draw a square",
+						},
+					],
+				},
+			],
+			tools: [
+				{
+					type: "image_generation",
+					size: "1024x1024",
+					quality: "low",
+				},
+			],
+		})
+		expect(response.data).toEqual([
+			{
+				b64_json: "partial-image-data",
+				revised_prompt: "draw a square",
+			},
+		])
+		expect(response.created).toBeGreaterThan(0)
+
+		await fs.rm(path.dirname(authFilePath), {
+			recursive: true,
+			force: true,
+		})
+	})
+
+	test("rejects invalid image reference lists", async () => {
+		const imageGenerationGateway = {
+			generate: vi.fn(),
+		}
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			imageGenerationGateway,
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/images/generations", {
+				method: "POST",
+				headers: authHeaders({
+					"Content-Type": "application/json",
+				}),
+				body: JSON.stringify({
+					prompt: "draw a square",
+					images: new Array(11).fill("raw-base64"),
+				}),
+			}),
+		)
+
 		expect(response.status).toBe(400)
-		expect(fetch).not.toHaveBeenCalled()
+		expect(imageGenerationGateway.generate).not.toHaveBeenCalled()
 	})
 
 	test("emits a chat error log when messages is invalid", async () => {
 		const requestLogger = vi.fn()
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			requestLogger,
 		})
 
 		const response = await handler(
 			new Request("http://localhost/v1/chat/completions", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.4",
 					messages: "not-an-array",
@@ -297,5 +633,63 @@ describe("openai oauth server", () => {
 				message: "`messages` must be an array.",
 			}),
 		)
+	})
+
+	test("supports json_schema response_format for chat completions", async () => {
+		const generateObjectFn = vi.fn(async () => ({
+			object: { should_request: false, question: "" },
+			finishReason: "stop",
+			usage: {
+				inputTokens: 10,
+				outputTokens: 5,
+				totalTokens: 15,
+			},
+		})) as unknown as typeof generateObject
+
+		const response = await handleChatCompletionsRequest(
+			new Request("http://localhost/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					model: "gpt-5.4-mini",
+					messages: [{ role: "user", content: "classify this" }],
+					response_format: {
+						type: "json_schema",
+						json_schema: {
+							name: "chooser_decision",
+							schema: {
+								type: "object",
+								additionalProperties: false,
+								properties: {
+									should_request: { type: "boolean" },
+									question: { type: "string" },
+								},
+								required: ["should_request", "question"],
+							},
+						},
+					},
+				}),
+			}),
+			(() => ({})) as unknown as OpenAIOAuthProvider,
+			undefined,
+			{
+				generateObjectFn,
+			},
+		)
+
+		expect(response.status).toBe(200)
+		await expect(response.json()).resolves.toMatchObject({
+			choices: [
+				{
+					message: {
+						role: "assistant",
+						content: '{"should_request":false,"question":""}',
+					},
+					finish_reason: "stop",
+				},
+			],
+		})
 	})
 })
