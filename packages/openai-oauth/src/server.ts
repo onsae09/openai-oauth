@@ -8,6 +8,7 @@ import {
 	createOpenAIOAuth,
 	type OpenAIOAuthProvider,
 } from "../../openai-oauth-provider/src/index.js"
+import { authenticateApiKey } from "./api-keys.js"
 import { handleChatCompletionsRequest } from "./chat-completions.js"
 import {
 	CodexResponsesImageGenerationGateway,
@@ -54,6 +55,13 @@ const handleRoutes = async (
 			ok: true,
 			replay_state: "stateful",
 		})
+	}
+
+	if (url.pathname === "/v1" || url.pathname.startsWith("/v1/")) {
+		const auth = await authenticateApiKey(request, settings.apiKeysFilePath)
+		if (!auth.ok) {
+			return toErrorResponse(auth.message, 401, "authentication_error")
+		}
 	}
 
 	if (request.method === "GET" && url.pathname === "/v1/models") {

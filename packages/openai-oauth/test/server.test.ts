@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -9,6 +10,8 @@ import {
 	CodexResponsesImageGenerationGateway,
 	createOpenAIOAuthFetchHandler,
 } from "../src/index.js"
+
+const TEST_API_KEY = "test-api-key"
 
 const createAuthFile = async (): Promise<string> => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "openai-oauth-server-"))
@@ -30,6 +33,37 @@ const createAuthFile = async (): Promise<string> => {
 	return authPath
 }
 
+const createApiKeysFile = async (): Promise<string> => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "openai-oauth-keys-"))
+	const keyPath = path.join(root, "api-keys.json")
+	await fs.writeFile(
+		keyPath,
+		JSON.stringify(
+			{
+				version: 1,
+				keys: [
+					{
+						id: "key_test",
+						name: "test",
+						prefix: "test-api-key",
+						hash: `sha256:${createHash("sha256").update(TEST_API_KEY).digest("hex")}`,
+						created_at: "2026-01-01T00:00:00Z",
+					},
+				],
+			},
+			null,
+			2,
+		),
+		"utf-8",
+	)
+	return keyPath
+}
+
+const authHeaders = (headers: Record<string, string> = {}) => ({
+	...headers,
+	Authorization: `Bearer ${TEST_API_KEY}`,
+})
+
 describe("openai oauth server", () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
@@ -37,12 +71,14 @@ describe("openai oauth server", () => {
 
 	test("lists configured models", async () => {
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			models: ["gpt-5.2", "gpt-5.1-codex"],
 		})
 
 		const response = await handler(
 			new Request("http://localhost/v1/models", {
 				method: "GET",
+				headers: authHeaders(),
 			}),
 		)
 
@@ -89,6 +125,7 @@ describe("openai oauth server", () => {
 			)
 		})
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -97,6 +134,7 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/models", {
 				method: "GET",
+				headers: authHeaders(),
 			}),
 		)
 
@@ -143,6 +181,7 @@ describe("openai oauth server", () => {
 				),
 		)
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -151,6 +190,7 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/models", {
 				method: "GET",
+				headers: authHeaders(),
 			}),
 		)
 
@@ -182,6 +222,45 @@ describe("openai oauth server", () => {
 		})
 	})
 
+	test("requires an API key for OpenAI-compatible routes", async () => {
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			models: ["gpt-5.4"],
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/models", {
+				method: "GET",
+			}),
+		)
+
+		expect(response.status).toBe(401)
+		await expect(response.json()).resolves.toEqual({
+			error: {
+				message: "Missing API key. Send `Authorization: Bearer <api-key>`.",
+				type: "authentication_error",
+			},
+		})
+	})
+
+	test("accepts x-api-key authentication", async () => {
+		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
+			models: ["gpt-5.4"],
+		})
+
+		const response = await handler(
+			new Request("http://localhost/v1/models", {
+				method: "GET",
+				headers: {
+					"x-api-key": TEST_API_KEY,
+				},
+			}),
+		)
+
+		expect(response.status).toBe(200)
+	})
+
 	test("aggregates streaming responses requests into json when stream is false", async () => {
 		const authFilePath = await createAuthFile()
 		const fetch = vi.fn(async () => {
@@ -207,6 +286,7 @@ describe("openai oauth server", () => {
 		})
 
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -216,9 +296,9 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/responses", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.2",
 					stream: false,
@@ -284,6 +364,7 @@ describe("openai oauth server", () => {
 		})
 
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -292,9 +373,9 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/responses", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.4",
 					stream: false,
@@ -337,6 +418,7 @@ describe("openai oauth server", () => {
 			return new Response(stream, { status: 200 })
 		})
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			authFilePath,
 			ensureFresh: false,
 			fetch,
@@ -345,9 +427,9 @@ describe("openai oauth server", () => {
 		const response = await handler(
 			new Request("http://localhost/v1/responses", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.2",
 					stream: false,
@@ -379,15 +461,16 @@ describe("openai oauth server", () => {
 			})),
 		}
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			imageGenerationGateway,
 		})
 
 		const response = await handler(
 			new Request("http://localhost/v1/images/generations", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.4",
 					prompt: "draw a square",
@@ -501,15 +584,16 @@ describe("openai oauth server", () => {
 			generate: vi.fn(),
 		}
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			imageGenerationGateway,
 		})
 
 		const response = await handler(
 			new Request("http://localhost/v1/images/generations", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					prompt: "draw a square",
 					images: new Array(11).fill("raw-base64"),
@@ -524,15 +608,16 @@ describe("openai oauth server", () => {
 	test("emits a chat error log when messages is invalid", async () => {
 		const requestLogger = vi.fn()
 		const handler = createOpenAIOAuthFetchHandler({
+			apiKeysFilePath: await createApiKeysFile(),
 			requestLogger,
 		})
 
 		const response = await handler(
 			new Request("http://localhost/v1/chat/completions", {
 				method: "POST",
-				headers: {
+				headers: authHeaders({
 					"Content-Type": "application/json",
-				},
+				}),
 				body: JSON.stringify({
 					model: "gpt-5.4",
 					messages: "not-an-array",

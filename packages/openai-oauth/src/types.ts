@@ -141,6 +141,7 @@ export type OpenAIOAuthServerOptions = Omit<
 	port?: number
 	models?: string[]
 	codexVersion?: string
+	apiKeysFilePath?: string
 	imageGenerationGateway?: ImageGenerationGateway
 	requestLogger?: (event: OpenAIOAuthServerLogEvent) => void
 }

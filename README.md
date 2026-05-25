@@ -17,10 +17,11 @@ This package lets you create a localhost proxy to `chatgpt.com/backend-api/codex
 Use directly:
 
 ```bash
+python3 scripts/api_keys.py
 npx openai-oauth
 
 OpenAI-compatible endpoint ready at http://127.0.0.1:10531/v1
-Use this as your OpenAI base URL. No API key is required.
+Use this as your OpenAI base URL. Send Authorization: Bearer <api-key>.
 Available Models: gpt-5.4, gpt-5.3-codex, ...
 ```
 
@@ -56,8 +57,31 @@ The CLI and the provider share the same core OAuth transport settings.
 | OAuth client id     | `--oauth-client-id` | `clientId`     | `app_EMoamEEZ73f0CkXaXp7hrann`                                                                                                                          | Override the OAuth client id used for refresh.                                                                                     |
 | OAuth token URL     | `--oauth-token-url` | `tokenUrl`     | `https://auth.openai.com/oauth/token`                                                                                                                   | Override the OAuth token URL used for refresh.                                                                                     |
 | Auth file path      | `--oauth-file`      | `authFilePath` | `--oauth-file` path if provided, otherwise `$CHATGPT_LOCAL_HOME/auth.json`, `$CODEX_HOME/auth.json`, `~/.chatgpt-local/auth.json`, `~/.codex/auth.json` | Override where the local OAuth auth file is discovered.                                                                            |
+| API keys file path  | `--api-keys-file`   | `apiKeysFilePath` | `api_key.json`                                                                                                                                          | JSON key store used to authenticate `/v1/*` requests. Create keys with the interactive `python3 scripts/api_keys.py` CUI.          |
 | Ensure fresh tokens | N/A                 | `ensureFresh`  | `true`                                                                                                                                                  | Control whether access tokens are refreshed automatically.                                                                         |
 | Provider name       | N/A                 | `name`         | `openai`                                                                                                                                                | Override the provider name exposed to Vercel AI SDK internals.                                                                     |
+
+## API Keys
+
+The local OpenAI-compatible server requires an API key for every `/v1/*`
+request. Health checks and CORS preflight requests stay public.
+
+Create a key:
+
+```bash
+python3 scripts/api_keys.py
+```
+
+The CUI guides you through creating, listing, and revoking keys. It prints the
+full key once and stores only its SHA-256 hash in
+`api_key.json`. Use the generated key like a normal OpenAI key:
+
+```bash
+curl http://127.0.0.1:10531/v1/models \
+  -H "Authorization: Bearer ooa_..."
+```
+
+Run the same CUI again whenever you need to list or revoke keys.
 
 ## Features
 
@@ -84,6 +108,7 @@ Request:
 
 ```bash
 curl http://127.0.0.1:10531/v1/images/generations \
+  -H "Authorization: Bearer ooa_..." \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4",

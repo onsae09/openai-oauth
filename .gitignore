@@ -4,3 +4,4 @@ coverage
 .turbo
 .env
 .env.local
+api_key.json

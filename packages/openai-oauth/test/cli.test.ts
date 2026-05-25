@@ -25,6 +25,8 @@ describe("openai oauth cli", () => {
 			"https://auth.example.com/oauth/token",
 			"--oauth-file",
 			"/tmp/auth.json",
+			"--api-keys-file",
+			"/tmp/api-keys.json",
 		])
 
 		expect(toServerOptions(parsed)).toMatchObject({
@@ -36,6 +38,7 @@ describe("openai oauth cli", () => {
 			clientId: "client-123",
 			tokenUrl: "https://auth.example.com/oauth/token",
 			authFilePath: "/tmp/auth.json",
+			apiKeysFilePath: "/tmp/api-keys.json",
 		})
 	})
 
@@ -53,7 +56,7 @@ describe("openai oauth cli", () => {
 		).toBe(
 			[
 				"OpenAI-compatible endpoint ready at http://127.0.0.1:10531/v1",
-				"Use this as your OpenAI base URL. No API key is required.",
+				"Use this as your OpenAI base URL. Send Authorization: Bearer <api-key>.",
 				"",
 				"Available Models: gpt-5.4, gpt-5.3-codex",
 			].join("\n"),

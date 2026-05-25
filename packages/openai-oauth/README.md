@@ -7,6 +7,7 @@ OpenAI-compatible local endpoint backed by your ChatGPT account.
 ## Usage
 
 ```bash
+python3 scripts/api_keys.py
 npx openai-oauth
 ```
 
@@ -14,7 +15,7 @@ When startup succeeds, the CLI prints:
 
 ```text
 OpenAI-compatible endpoint ready at http://127.0.0.1:10531/v1
-Use this as your OpenAI base URL. No API key is required.
+Use this as your OpenAI base URL. Send Authorization: Bearer <api-key>.
 Available Models: gpt-5.4, gpt-5.3-codex, ...
 ```
 
@@ -36,6 +37,29 @@ npx @openai/codex login
 | OAuth client id   | `--oauth-client-id` | `app_EMoamEEZ73f0CkXaXp7hrann`                                                                                                                          | Override the OAuth client id used for refresh.                                                                                     |
 | OAuth token URL   | `--oauth-token-url` | `https://auth.openai.com/oauth/token`                                                                                                                   | Override the OAuth token URL used for refresh.                                                                                     |
 | Auth file path    | `--oauth-file`      | `--oauth-file` path if provided, otherwise `$CHATGPT_LOCAL_HOME/auth.json`, `$CODEX_HOME/auth.json`, `~/.chatgpt-local/auth.json`, `~/.codex/auth.json` | Override where the local OAuth auth file is discovered.                                                                            |
+| API keys file path | `--api-keys-file`   | `api_key.json`                                                                                                                                           | JSON key store used to authenticate `/v1/*` requests. Create keys with the interactive `python3 scripts/api_keys.py` CUI.          |
+
+## API Keys
+
+The local OpenAI-compatible server requires an API key for every `/v1/*`
+request. Health checks and CORS preflight requests stay public.
+
+Create a key:
+
+```bash
+python3 scripts/api_keys.py
+```
+
+The CUI guides you through creating, listing, and revoking keys. It prints the
+full key once and stores only its SHA-256 hash in
+`api_key.json`. Use the generated key like a normal OpenAI key:
+
+```bash
+curl http://127.0.0.1:10531/v1/models \
+  -H "Authorization: Bearer ooa_..."
+```
+
+Run the same CUI again whenever you need to list or revoke keys.
 
 ## Features
 
@@ -62,6 +86,7 @@ Request:
 
 ```bash
 curl http://127.0.0.1:10531/v1/images/generations \
+  -H "Authorization: Bearer ooa_..." \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4",

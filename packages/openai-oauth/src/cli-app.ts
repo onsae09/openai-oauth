@@ -6,6 +6,7 @@ import {
 	resolveAuthFileCandidates,
 } from "../../openai-oauth-core/src/index.js"
 import packageJson from "../package.json" with { type: "json" }
+import { DEFAULT_API_KEYS_FILE } from "./api-keys.js"
 import { installCliWarningLogger, toStartupMessage } from "./cli-logging.js"
 import { startOpenAIOAuthServer } from "./index.js"
 import { resolveOpenAIOAuthModels } from "./models.js"
@@ -21,6 +22,7 @@ export type CliArgs = {
 	clientId?: string
 	tokenUrl?: string
 	authFilePath?: string
+	apiKeysFilePath?: string
 }
 
 const parseModels = (value: string | undefined): string[] | undefined => {
@@ -51,6 +53,7 @@ const helpLines = [
 	"  --oauth-client-id <id>     Override the OAuth client id used for refresh.",
 	"  --oauth-token-url <url>    Override the OAuth token URL used for refresh.",
 	"  --oauth-file <path>        Path to the local auth.json file.",
+	`  --api-keys-file <path>     Path to API key store. Default: ${DEFAULT_API_KEYS_FILE}`,
 	"",
 	"Flags",
 	"  --help                     Show help",
@@ -100,6 +103,10 @@ const createCliParser = (argv: string[]) =>
 			type: "string",
 			describe: "Path to the local auth.json file.",
 		})
+		.option("api-keys-file", {
+			type: "string",
+			describe: "Path to API key store.",
+		})
 
 const isHelpFlag = (argv: string[]): boolean =>
 	argv.includes("--help") || argv.includes("-h")
@@ -120,6 +127,7 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
 		clientId: parsed.oauthClientId,
 		tokenUrl: parsed.oauthTokenUrl,
 		authFilePath: parsed.oauthFile,
+		apiKeysFilePath: parsed.apiKeysFile,
 	}
 }
 
@@ -132,6 +140,7 @@ export const toServerOptions = (args: CliArgs) => ({
 	clientId: args.clientId,
 	tokenUrl: args.tokenUrl,
 	authFilePath: args.authFilePath,
+	apiKeysFilePath: args.apiKeysFilePath,
 })
 
 const findExistingAuthFile = async (
