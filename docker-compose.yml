@@ -1,0 +1,28 @@
+services:
+  openai-oauth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openai-oauth:local
+    container_name: openai-oauth
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:10531:10531"
+    networks:
+      - mainnet
+    volumes:
+      - ./auth.json:/home/node/.codex/auth.json
+      - ./api_key.json:/app/api_key.json:ro
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "10531"
+      - --oauth-file
+      - /home/node/.codex/auth.json
+      - --api-keys-file
+      - /app/api_key.json
+
+networks:
+  mainnet:
+    external: true

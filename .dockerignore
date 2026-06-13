@@ -5,3 +5,7 @@ packages/*/node_modules
 packages/*/dist
 npm-debug.log*
 Dockerfile
+.env
+.env.local
+auth.json
+api_key.json
